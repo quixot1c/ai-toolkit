@@ -122,8 +122,6 @@ celerybeat.pid
 # Environments
 .env
 .venv
-.python
-.node
 env/
 venv/
 ENV/
@@ -184,4 +182,13 @@ cython_debug/
 aitk_db.db
 /notes.md
 /data
-.claude
+
+# Session-local / scratchpad
+/.claude/
+/config/examples/generate_cartwheel_1024.yaml
+/test_data/
+/toolkit/taehv/*.pth
+/toolkit/taehv/__pycache__/
+
+# YOLO weights auto-downloaded by ultralytics at cwd
+/yolo*.pt

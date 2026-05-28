@@ -4,7 +4,6 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { TOOLKIT_ROOT, getTrainingFolder, getHFToken } from '../paths';
-import { resolvePythonPath } from '../pythonPath';
 const isWindows = process.platform === 'win32';
 
 const startAndWatchJob = (job: Job) => {
@@ -53,7 +52,21 @@ const startAndWatchJob = (job: Job) => {
     // write the config file
     fs.writeFileSync(configPath, JSON.stringify(jobConfig, null, 2));
 
-    const pythonPath = resolvePythonPath();
+    let pythonPath = 'python';
+    // use .venv or venv if it exists
+    if (fs.existsSync(path.join(TOOLKIT_ROOT, '.venv'))) {
+      if (isWindows) {
+        pythonPath = path.join(TOOLKIT_ROOT, '.venv', 'Scripts', 'python.exe');
+      } else {
+        pythonPath = path.join(TOOLKIT_ROOT, '.venv', 'bin', 'python');
+      }
+    } else if (fs.existsSync(path.join(TOOLKIT_ROOT, 'venv'))) {
+      if (isWindows) {
+        pythonPath = path.join(TOOLKIT_ROOT, 'venv', 'Scripts', 'python.exe');
+      } else {
+        pythonPath = path.join(TOOLKIT_ROOT, 'venv', 'bin', 'python');
+      }
+    }
 
     const runFilePath = path.join(TOOLKIT_ROOT, 'run.py');
     if (!fs.existsSync(runFilePath)) {
@@ -112,23 +125,16 @@ const startAndWatchJob = (job: Job) => {
         });
       }
 
-      // Save the PID to the database and a file for future management (stop/inspect)
-      const pid = subprocess.pid ?? null;
-      if (pid != null) {
-        await prisma.job.update({
-          where: { id: jobID },
-          data: { pid },
-        });
-      }
-      try {
-        fs.writeFileSync(path.join(trainingFolder, 'pid.txt'), String(pid ?? ''), { flag: 'w' });
-      } catch (e) {
-        console.error('Error writing pid file:', e);
-      }
-
       // Important: let the child run independently of this Node process.
       if (subprocess.unref) {
         subprocess.unref();
+      }
+
+      // Optionally write a pid file for future management (stop/inspect) without keeping streams open
+      try {
+        fs.writeFileSync(path.join(trainingFolder, 'pid.txt'), String(subprocess.pid ?? ''), { flag: 'w' });
+      } catch (e) {
+        console.error('Error writing pid file:', e);
       }
 
       // (No stdout/stderr listeners — logging should go to --log handled by your Python)

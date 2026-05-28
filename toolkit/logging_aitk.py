@@ -109,8 +109,6 @@ class UILogger:
         self._flush_every_secs = float(flush_every_secs)
         self._last_flush = time.time()
 
-        self._first_commit_done = False
-
     # start logging the training
     def start(self):
         if self._started:
@@ -128,6 +126,29 @@ class UILogger:
         self._con.execute("PRAGMA busy_timeout=30000;")
 
         self._init_schema(self._con)
+
+        # Step-4 marker: signals that this run uses the new
+        # `subsystem/kind/variant` canonical metric namespace (alongside
+        # the legacy keys, dual-written by SDTrainer.hook_train_loop).
+        # Consumers can detect new-format runs via the
+        # `_meta/schema_version` row in the metric_keys table. Writing it
+        # at step=0 keeps it well outside any user training step.
+        try:
+            self._con.execute(
+                "INSERT OR IGNORE INTO steps(step, wall_time) VALUES(0, ?);",
+                (time.time(),),
+            )
+            self._con.execute(
+                "INSERT OR REPLACE INTO metrics(step, key, value_real, value_text)"
+                " VALUES(0, '_meta/schema_version', 2.0, NULL);"
+            )
+            self._con.execute(
+                "INSERT OR REPLACE INTO metric_keys(key, first_seen_step, last_seen_step)"
+                " VALUES('_meta/schema_version', 0, 0);"
+            )
+        except sqlite3.Error:
+            # Best-effort: never block training because of a metadata row.
+            pass
 
         self._started = True
         self._last_flush = time.time()
@@ -154,12 +175,6 @@ class UILogger:
             step = int(step)
             if step >= self._step_counter:
                 self._step_counter = step + 1
-
-        # On the first commit of this run, prune any rows from a prior run
-        # whose step is greater than where we are resuming from.
-        if not self._first_commit_done:
-            self._prune_future_steps(step)
-            self._first_commit_done = True
 
         wall_time = time.time()
 
@@ -254,32 +269,46 @@ class UILogger:
             return None, None
         if isinstance(v, bool):
             return float(int(v)), None
+        # MetricValue from extensions_built_in.sd_trainer.metric_buffer is
+        # a ``float`` subclass that carries a `breakdown` dict. Detect it
+        # *before* the int/float branch (which would also match) so we can
+        # emit the breakdown JSON into `value_text` alongside the scalar.
+        breakdown = getattr(v, "breakdown", None)
+        if breakdown is not None and isinstance(v, (int, float)):
+            try:
+                vr: Optional[float] = float(v)
+            except (TypeError, ValueError):
+                vr = None
+            vt: Optional[str] = None
+            try:
+                import json as _json
+                vt = _json.dumps(breakdown, ensure_ascii=False)
+            except (TypeError, ValueError):
+                vt = None
+            return vr, vt
         if isinstance(v, (int, float)):
             return float(v), None
+        # Rich payload shape used by the metrics-overhaul per-sample
+        # breakdown when an explicit dict is passed in:
+        # {"value": <float>, "breakdown": <json-serialisable dict>}.
+        if isinstance(v, dict) and "value" in v:
+            try:
+                vr = float(v["value"])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                vr = None
+            vt = None
+            breakdown = v.get("breakdown")
+            if breakdown is not None:
+                try:
+                    import json as _json
+                    vt = _json.dumps(breakdown, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    vt = None
+            return vr, vt
         try:
             return float(v), None  # type: ignore[arg-type]
         except Exception:
             return None, str(v)
-
-    def _prune_future_steps(self, current_step: int) -> None:
-        assert self._con is not None
-        con = self._con
-
-        con.execute("BEGIN;")
-        # metrics rows cascade via FK ON DELETE CASCADE
-        con.execute("DELETE FROM steps WHERE step > ?;", (current_step,))
-        # drop any keys that no longer have any metrics, and clamp last_seen_step
-        con.execute(
-            "DELETE FROM metric_keys "
-            "WHERE NOT EXISTS (SELECT 1 FROM metrics WHERE metrics.key = metric_keys.key);"
-        )
-        con.execute(
-            "UPDATE metric_keys "
-            "SET last_seen_step = (SELECT MAX(step) FROM metrics WHERE metrics.key = metric_keys.key) "
-            "WHERE last_seen_step > ?;",
-            (current_step,),
-        )
-        con.execute("COMMIT;")
 
     def _flush(self) -> None:
         if not self._pending_steps and not self._pending_metrics:

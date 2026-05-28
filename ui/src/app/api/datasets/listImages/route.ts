@@ -18,9 +18,6 @@ export async function POST(request: Request) {
     // Find all images recursively
     const imageFiles = findImagesRecursively(datasetFolder);
 
-    // Sort server-side so the client doesn't have to sort large lists
-    imageFiles.sort((a, b) => a.localeCompare(b));
-
     // Format response
     const result = imageFiles.map(imgPath => ({
       img_path: imgPath,
@@ -39,22 +36,21 @@ export async function POST(request: Request) {
  * @returns Array of absolute paths to image files
  */
 function findImagesRecursively(dir: string): string[] {
-  const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.m4v', '.flv', '.mp3', '.wav', '.flac', '.ogg'];
+  const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.m4v', '.flv', '.mp3', '.wav'];
   let results: string[] = [];
 
-  // withFileTypes avoids a separate statSync per entry — a big win on large datasets
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const items = fs.readdirSync(dir);
 
-  for (const entry of entries) {
-    const name = entry.name;
-    if (name.startsWith('.')) continue;
-    const itemPath = path.join(dir, name);
+  for (const item of items) {
+    const itemPath = path.join(dir, item);
+    const stat = fs.statSync(itemPath);
 
-    if (entry.isDirectory()) {
-      if (name === '_controls') continue;
+    if (stat.isDirectory() && item !== '_controls' && !item.startsWith('.')) {
+      // If it's a directory, recursively search it
       results = results.concat(findImagesRecursively(itemPath));
-    } else if (entry.isFile()) {
-      const ext = path.extname(name).toLowerCase();
+    } else {
+      // If it's a file, check if it's an image
+      const ext = path.extname(itemPath).toLowerCase();
       if (imageExtensions.includes(ext)) {
         results.push(itemPath);
       }

@@ -1,38 +1,31 @@
 'use client';
 
-import { useEffect, useState, use, useMemo, useCallback } from 'react';
+import { useEffect, useState, use, useMemo } from 'react';
 import { LuImageOff, LuLoader, LuBan } from 'react-icons/lu';
 import { FaChevronLeft } from 'react-icons/fa';
-import { VirtuosoGrid } from 'react-virtuoso';
 import DatasetImageCard from '@/components/DatasetImageCard';
-import DatasetImageViewer from '@/components/DatasetImageViewer';
 import { Button } from '@headlessui/react';
-import AddImagesModal, { openImagesModal, useOpenImagesModalOnDrag } from '@/components/AddImagesModal';
+import AddImagesModal, { openImagesModal } from '@/components/AddImagesModal';
 import { TopBar, MainContent } from '@/components/layout';
 import { apiClient } from '@/utils/api';
-import useSettings from '@/hooks/useSettings';
-import { pathJoin } from '@/utils/basic';
-import AutoCaptionButton from '@/components/AutoCaptionButton';
+import FullscreenDropOverlay from '@/components/FullscreenDropOverlay';
 
 export default function DatasetPage({ params }: { params: { datasetName: string } }) {
   const [imgList, setImgList] = useState<{ img_path: string }[]>([]);
-  const [isAutoCaptioning, setIsAutoCaptioning] = useState(false);
   const usableParams = use(params as any) as { datasetName: string };
   const datasetName = usableParams.datasetName;
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const { settings, isSettingsLoaded } = useSettings();
-  const [selectedImgPath, setSelectedImgPath] = useState<string | null>(null);
-  const [captionRefreshKeys, setCaptionRefreshKeys] = useState<Record<string, number>>({});
-  const [scrollParent, setScrollParent] = useState<HTMLDivElement | null>(null);
-  const scrollParentCallback = useCallback((el: HTMLDivElement | null) => setScrollParent(el), []);
 
   const refreshImageList = (dbName: string) => {
     setStatus('loading');
+    console.log('Fetching images for dataset:', dbName);
     apiClient
       .post('/api/datasets/listImages', { datasetName: dbName })
       .then((res: any) => {
         const data = res.data;
-        // Server already sorts; avoid the client-side sort that's expensive on large lists.
+        console.log('Images:', data.images);
+        // sort
+        data.images.sort((a: { img_path: string }, b: { img_path: string }) => a.img_path.localeCompare(b.img_path));
         setImgList(data.images);
         setStatus('success');
       })
@@ -41,10 +34,6 @@ export default function DatasetPage({ params }: { params: { datasetName: string 
         setStatus('error');
       });
   };
-  useOpenImagesModalOnDrag(datasetName, () => refreshImageList(datasetName));
-
-  const imgPaths = useMemo(() => imgList.map(img => img.img_path), [imgList]);
-
   useEffect(() => {
     if (datasetName) {
       refreshImageList(datasetName);
@@ -65,27 +54,27 @@ export default function DatasetPage({ params }: { params: { datasetName: string 
       text = 'Loading Images';
       subtitle = 'Please wait while we fetch your dataset images...';
       showIt = true;
-      bgColor = 'bg-gray-800/50';
-      textColor = 'text-gray-100';
-      iconColor = 'text-gray-400';
+      bgColor = 'bg-gray-50 dark:bg-gray-800/50';
+      textColor = 'text-gray-900 dark:text-gray-100';
+      iconColor = 'text-gray-500 dark:text-gray-400';
     }
     if (status == 'error') {
       icon = <LuBan className="w-8 h-8" />;
       text = 'Error Loading Images';
       subtitle = 'There was a problem fetching the images. Please try refreshing the page.';
       showIt = true;
-      bgColor = 'bg-red-600/20';
-      textColor = 'text-red-100';
-      iconColor = 'text-red-400';
+      bgColor = 'bg-red-50 dark:bg-red-950/20';
+      textColor = 'text-red-900 dark:text-red-100';
+      iconColor = 'text-red-600 dark:text-red-400';
     }
     if (status == 'success' && imgList.length === 0) {
       icon = <LuImageOff className="w-8 h-8" />;
       text = 'No Images Found';
       subtitle = 'This dataset is empty. Click "Add Images" to get started.';
       showIt = true;
-      bgColor = 'bg-gray-800/50';
-      textColor = 'text-gray-100';
-      iconColor = 'text-gray-400';
+      bgColor = 'bg-gray-50 dark:bg-gray-800/50';
+      textColor = 'text-gray-900 dark:text-gray-100';
+      iconColor = 'text-gray-500 dark:text-gray-400';
     }
 
     if (!showIt) return null;
@@ -105,66 +94,43 @@ export default function DatasetPage({ params }: { params: { datasetName: string 
     <>
       {/* Fixed top bar */}
       <TopBar>
-        <div className="flex-shrink-0">
-          <Button className="text-gray-500 dark:text-gray-300 px-2 sm:px-3 mt-1" onClick={() => history.back()}>
+        <div>
+          <Button className="text-gray-500 dark:text-gray-300 px-3 mt-1" onClick={() => history.back()}>
             <FaChevronLeft />
           </Button>
         </div>
-        <div className="min-w-0 flex-shrink">
-          <h1 className="text-base sm:text-lg truncate">
-            <span className="hidden sm:inline">Dataset: </span>
-            {datasetName}
-          </h1>
+        <div>
+          <h1 className="text-lg">Dataset: {datasetName}</h1>
         </div>
         <div className="flex-1"></div>
-        <div className="flex-shrink-0 flex items-center gap-1 sm:gap-2">
-          <AutoCaptionButton
-            datasetPath={`${pathJoin(settings.DATASETS_FOLDER, datasetName)}`}
-            setIsAutoCaptioning={setIsAutoCaptioning}
-          />
+        <div>
           <Button
-            className="text-white bg-slate-600 px-2 sm:px-3 py-1 rounded-md text-sm sm:text-base whitespace-nowrap"
+            className="text-gray-200 bg-slate-600 px-3 py-1 rounded-md"
             onClick={() => openImagesModal(datasetName, () => refreshImageList(datasetName))}
           >
-            <span className="sm:hidden">+ Add</span>
-            <span className="hidden sm:inline">Add Images</span>
+            Add Images
           </Button>
         </div>
       </TopBar>
-      <MainContent ref={scrollParentCallback}>
+      <MainContent>
         {PageInfoContent}
-        {status === 'success' && imgList.length > 0 && scrollParent && (
-          <VirtuosoGrid
-            totalCount={imgList.length}
-            customScrollParent={scrollParent}
-            overscan={400}
-            listClassName="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
-            itemContent={index => {
-              const img = imgList[index];
-              if (!img) return null;
-              return (
-                <DatasetImageCard
-                  alt="image"
-                  isAutoCaptioning={isAutoCaptioning}
-                  imageUrl={img.img_path}
-                  onDelete={() => refreshImageList(datasetName)}
-                  onImageClick={() => setSelectedImgPath(img.img_path)}
-                  captionRefreshKey={captionRefreshKeys[img.img_path] || 0}
-                  observerRoot={scrollParent}
-                />
-              );
-            }}
-            computeItemKey={index => imgList[index]?.img_path ?? index}
-          />
+        {status === 'success' && imgList.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {imgList.map(img => (
+              <DatasetImageCard
+                key={img.img_path}
+                alt="image"
+                imageUrl={img.img_path}
+                onDelete={() => refreshImageList(datasetName)}
+              />
+            ))}
+          </div>
         )}
       </MainContent>
       <AddImagesModal />
-      <DatasetImageViewer
-        imgPath={selectedImgPath}
-        imageList={imgPaths}
-        onChange={setSelectedImgPath}
-        refreshImages={() => refreshImageList(datasetName)}
-        onCaptionSaved={path => setCaptionRefreshKeys(prev => ({ ...prev, [path]: (prev[path] || 0) + 1 }))}
+      <FullscreenDropOverlay
+        datasetName={datasetName}
+        onComplete={() => refreshImageList(datasetName)}
       />
     </>
   );

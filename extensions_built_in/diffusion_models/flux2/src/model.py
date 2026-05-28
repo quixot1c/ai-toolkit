@@ -149,9 +149,8 @@ class Flux2(nn.Module):
         ctx: Tensor,
         ctx_ids: Tensor,
         guidance: Tensor | None,
+        face_tokens: Tensor | None = None,
     ):
-        num_txt_tokens = ctx.shape[1]
-
         timestep_emb = timestep_embedding(timesteps, 256)
         vec = self.time_in(timestep_emb)
         if self.use_guidance_embed:
@@ -164,6 +163,22 @@ class Flux2(nn.Module):
 
         img = self.img_in(x)
         txt = self.txt_in(ctx)
+
+        # Store text token norm for diagnostics (reference for face_token_norm comparison)
+        with torch.no_grad():
+            self._last_txt_token_norm = txt.detach().float().norm(dim=-1).mean().item()
+
+        # LoRA+ID: inject projected face tokens into text stream
+        if face_tokens is not None:
+            face_tokens = face_tokens.to(dtype=txt.dtype, device=txt.device)
+            txt = torch.cat([txt, face_tokens], dim=1)
+            face_ids = torch.zeros(
+                face_tokens.shape[0], face_tokens.shape[1], ctx_ids.shape[-1],
+                device=ctx_ids.device, dtype=ctx_ids.dtype,
+            )
+            ctx_ids = torch.cat([ctx_ids, face_ids], dim=1)
+
+        num_txt_tokens = txt.shape[1]
 
         pe_x = self.pe_embedder(x_ids)
         pe_ctx = self.pe_embedder(ctx_ids)

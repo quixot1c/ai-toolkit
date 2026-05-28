@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Dialog, DialogBackdrop, DialogPanel } from '@headlessui/react';
 import { SampleConfig, SampleItem } from '@/types';
@@ -7,9 +7,7 @@ import { Cog } from 'lucide-react';
 import { Menu, MenuButton, MenuItem, MenuItems } from '@headlessui/react';
 import { openConfirm } from './ConfirmModal';
 import { apiClient } from '@/utils/api';
-import { isVideo, isAudio } from '@/utils/basic';
-import AudioPlayer from './AudioPlayer';
-import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import { isVideo } from '@/utils/basic';
 
 interface Props {
   imgPath: string | null; // current image path
@@ -30,7 +28,6 @@ export default function SampleImageViewer({
 }: Props) {
   const [mounted, setMounted] = useState(false);
   const [isOpen, setIsOpen] = useState(Boolean(imgPath));
-  const [showingControlIdx, setShowingControlIdx] = useState<number | null>(null);
 
   useEffect(() => setMounted(true), []);
 
@@ -47,10 +44,7 @@ export default function SampleImageViewer({
     }
   }, [isOpen, imgPath, onChange]);
 
-  const onCancel = useCallback(() => {
-    setShowingControlIdx(null);
-    setIsOpen(false);
-  }, []);
+  const onCancel = useCallback(() => setIsOpen(false), []);
 
   const imgInfo = useMemo(() => {
     // handle windows C:\\Apps\\AI-Toolkit\\AI-Toolkit\\output\\LoRA-Name\\samples\\1763563000704__000004000_0.jpg
@@ -86,7 +80,6 @@ export default function SampleImageViewer({
   const setImageAtIndex = useCallback(
     (idx: number) => {
       if (idx < 0 || idx >= sampleImages.length) return;
-      setShowingControlIdx(null);
       onChange(sampleImages[idx]);
     },
     [sampleImages, numSamples, onChange],
@@ -124,30 +117,6 @@ export default function SampleImageViewer({
     if (nextIdx > maxIdx) return;
     setImageAtIndex(nextIdx);
   }, [sampleImages, currentIndex, imgInfo.promptIdx, setImageAtIndex]);
-
-  const handleDelete = useCallback(() => {
-    if (!imgPath) return;
-    openConfirm({
-      title: 'Delete Sample',
-      message: `Are you sure you want to delete this sample? This action cannot be undone.`,
-      type: 'warning',
-      confirmText: 'Delete',
-      onConfirm: () => {
-        apiClient
-          .post('/api/img/delete', { imgPath: imgPath })
-          .then(() => {
-            console.log('Image deleted:', imgPath);
-            onChange(null);
-            if (refreshSampleImages) {
-              refreshSampleImages();
-            }
-          })
-          .catch(error => {
-            console.error('Error deleting image:', error);
-          });
-      },
-    });
-  }, [imgPath, onChange, refreshSampleImages]);
 
   const sampleItem = useMemo<SampleItem | null>(() => {
     if (!sampleConfig) return null;
@@ -189,13 +158,6 @@ export default function SampleImageViewer({
     return sampleConfig?.seed ?? '?';
   }, [sampleItem, sampleConfig]);
 
-  const displayedImgPath = useMemo(() => {
-    if (showingControlIdx !== null && controlImages[showingControlIdx]) {
-      return controlImages[showingControlIdx];
-    }
-    return imgPath;
-  }, [showingControlIdx, controlImages, imgPath]);
-
   // keyboard events while open
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -216,65 +178,13 @@ export default function SampleImageViewer({
         case 'ArrowRight':
           handleArrowRight();
           break;
-        case 'Delete':
-        case 'Backspace':
-          handleDelete();
-          break;
         default:
           break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onCancel, handleArrowUp, handleArrowDown, handleArrowLeft, handleArrowRight, handleDelete]);
-
-  // Touch swipe navigation
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
-  const multiTouchRef = useRef(false);
-  const zoomedRef = useRef(false);
-  const SWIPE_THRESHOLD = 40; // px before a swipe counts
-
-  const onTouchStart = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length > 1) {
-      multiTouchRef.current = true;
-      touchStartRef.current = null;
-      return;
-    }
-    multiTouchRef.current = false;
-    const t = e.touches[0];
-    if (!t) return;
-    touchStartRef.current = { x: t.clientX, y: t.clientY };
-  }, []);
-
-  const onTouchEnd = useCallback(
-    (e: React.TouchEvent) => {
-      const start = touchStartRef.current;
-      touchStartRef.current = null;
-      // If a pinch happened or we're zoomed in, don't treat as a swipe.
-      if (multiTouchRef.current || zoomedRef.current) {
-        if (e.touches.length === 0) multiTouchRef.current = false;
-        return;
-      }
-      if (!start) return;
-      const t = e.changedTouches[0];
-      if (!t) return;
-      const dx = t.clientX - start.x;
-      const dy = t.clientY - start.y;
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-      if (absX < SWIPE_THRESHOLD && absY < SWIPE_THRESHOLD) return;
-      if (absX > absY) {
-        // Horizontal swipe: left = next (ArrowRight), right = prev (ArrowLeft)
-        if (dx < 0) handleArrowRight();
-        else handleArrowLeft();
-      } else {
-        // Vertical swipe: up = next step (ArrowDown), down = prev step (ArrowUp)
-        if (dy < 0) handleArrowDown();
-        else handleArrowUp();
-      }
-    },
-    [handleArrowLeft, handleArrowRight, handleArrowUp, handleArrowDown],
-  );
+  }, [isOpen, onCancel, handleArrowUp, handleArrowDown, handleArrowLeft, handleArrowRight]);
 
   if (!mounted) return null;
 
@@ -285,27 +195,17 @@ export default function SampleImageViewer({
         className="fixed inset-0 bg-gray-900/75 transition-opacity data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in"
       />
       <div className="fixed inset-0 z-10 w-screen overflow-y-auto">
-        <div className="flex min-h-full items-center justify-center p-0 sm:p-4 text-center">
+        <div className="flex min-h-full items-center justify-center p-4 text-center">
           <DialogPanel
             transition
-            onTouchStart={onTouchStart}
-            onTouchEnd={onTouchEnd}
-            className="relative transform rounded-none sm:rounded-lg bg-gray-800 text-left shadow-xl transition-all data-closed:translate-y-4 data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in w-full sm:w-auto sm:max-w-[95%] sm:max-h-[95vh] data-closed:sm:translate-y-0 data-closed:sm:scale-95 flex flex-col overflow-hidden touch-pan-y"
+            className="relative transform rounded-lg bg-gray-800 text-left shadow-xl transition-all data-closed:translate-y-4 data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in max-w-[95%] max-h-[95vh] data-closed:sm:translate-y-0 data-closed:sm:scale-95 flex flex-col overflow-hidden"
           >
             <div className="overflow-hidden flex items-center justify-center">
-              {displayedImgPath &&
-                (isAudio(displayedImgPath) ? (
-                  <div className="w-[500px] h-[500px] max-w-full sm:max-w-[95vw] max-h-[82vh]">
-                    <AudioPlayer
-                      src={`/api/img/${encodeURIComponent(displayedImgPath)}`}
-                      title={displayedImgPath.replace(/^.*[\\/]/, '')}
-                      autoPlay
-                    />
-                  </div>
-                ) : isVideo(displayedImgPath) ? (
+              {imgPath &&
+                (isVideo(imgPath) ? (
                   <video
-                    src={`/api/img/${encodeURIComponent(displayedImgPath)}`}
-                    className="w-auto h-auto max-w-full sm:max-w-[95vw] max-h-[82vh] object-contain"
+                    src={`/api/img/${encodeURIComponent(imgPath)}`}
+                    className="w-auto h-auto max-w-[95vw] max-h-[82vh] object-contain"
                     preload="none"
                     playsInline
                     loop
@@ -313,27 +213,11 @@ export default function SampleImageViewer({
                     controls={true}
                   />
                 ) : (
-                  <TransformWrapper
-                    key={displayedImgPath}
-                    initialScale={1}
-                    minScale={1}
-                    maxScale={6}
-                    doubleClick={{ mode: 'toggle', step: 2 }}
-                    wheel={{ step: 0.2 }}
-                    panning={{ disabled: false, allowRightClickPan: false }}
-                    onTransform={(_ref, state) => {
-                      zoomedRef.current = state.scale > 1.01;
-                    }}
-                  >
-                    <TransformComponent>
-                      <img
-                        src={`/api/img/${encodeURIComponent(displayedImgPath)}`}
-                        alt="Sample Image"
-                        draggable={false}
-                        className="w-auto h-auto max-w-full sm:max-w-[95vw] max-h-[82vh] object-contain select-none !pointer-events-auto"
-                      />
-                    </TransformComponent>
-                  </TransformWrapper>
+                  <img
+                    src={`/api/img/${encodeURIComponent(imgPath)}`}
+                    alt="Sample Image"
+                    className="w-auto h-auto max-w-[95vw] max-h-[82vh] object-contain"
+                  />
                 ))}
             </div>
             {/* # make full width */}
@@ -350,25 +234,12 @@ export default function SampleImageViewer({
               </div>
               {controlImages.length > 0 && (
                 <div key={imgPath} className="flex space-x-2 mr-4">
-                  {showingControlIdx !== null && (
-                    <img
-                      src={`/api/img/${encodeURIComponent(imgPath!)}`}
-                      alt="Main"
-                      className="max-h-12 max-w-12 object-contain bg-black border-2 border-gray-700 hover:border-gray-500 rounded cursor-pointer"
-                      onClick={() => setShowingControlIdx(null)}
-                      title="Main image"
-                    />
-                  )}
                   {controlImages.map((ci, idx) => (
                     <img
                       key={idx}
                       src={`/api/img/${encodeURIComponent(ci)}`}
                       alt={`Control ${idx + 1}`}
-                      className={`max-h-12 max-w-12 object-contain bg-black border-2 rounded cursor-pointer ${
-                        showingControlIdx === idx ? 'border-blue-500' : 'border-gray-700 hover:border-gray-500'
-                      }`}
-                      onClick={() => setShowingControlIdx(idx)}
-                      title={`Control image ${idx + 1}`}
+                      className="max-h-12 max-w-12 object-contain bg-black border border-gray-700 rounded"
                     />
                   ))}
                 </div>
@@ -386,28 +257,42 @@ export default function SampleImageViewer({
                 </div>
               </div>
             </div>
-            <div className="absolute top-2 right-2 bg-gray-900 rounded-full p-1 leading-[0px] opacity-50 hover:opacity-100 z-20">
+            <div className="absolute top-2 right-2 bg-gray-900 rounded-full p-1 leading-[0px] opacity-50 hover:opacity-100">
               <Menu>
                 <MenuButton>
                   <Cog />
                 </MenuButton>
                 <MenuItems
                   anchor="bottom end"
-                  className="bg-gray-900 border border-gray-700 rounded shadow-lg w-48 px-2 py-2 mt-1 z-50"
+                  className="bg-gray-900 border border-gray-700 rounded shadow-lg w-48 px-4 py-2 mt-1 z-50"
                 >
-                  {imgPath && isAudio(imgPath) && (
-                    <MenuItem>
-                      <a
-                        className="cursor-pointer px-4 py-1 hover:bg-gray-800 rounded block"
-                        href={`/api/img/${encodeURIComponent(imgPath)}`}
-                        download={imgPath.replace(/^.*[\\/]/, '')}
-                      >
-                        Download
-                      </a>
-                    </MenuItem>
-                  )}
                   <MenuItem>
-                    <div className="cursor-pointer px-4 py-1 hover:bg-gray-800 rounded" onClick={handleDelete}>
+                    <div
+                      className="cursor-pointer"
+                      onClick={() => {
+                        let message = `Are you sure you want to delete this sample? This action cannot be undone.`;
+                        openConfirm({
+                          title: 'Delete Sample',
+                          message: message,
+                          type: 'warning',
+                          confirmText: 'Delete',
+                          onConfirm: () => {
+                            apiClient
+                              .post('/api/img/delete', { imgPath: imgPath })
+                              .then(() => {
+                                console.log('Image deleted:', imgPath);
+                                onChange(null);
+                                if (refreshSampleImages) {
+                                  refreshSampleImages();
+                                }
+                              })
+                              .catch(error => {
+                                console.error('Error deleting image:', error);
+                              });
+                          },
+                        });
+                      }}
+                    >
                       Delete Sample
                     </div>
                   </MenuItem>

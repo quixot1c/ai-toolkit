@@ -116,9 +116,7 @@ class Wan225bModel(Wan21):
         return 32
 
     def get_generation_pipeline(self):
-        # todo unipc got broken in a diffusers update. Use euler for now.
-        # scheduler = UniPCMultistepScheduler(**self._wan_generation_scheduler_config)
-        scheduler = self.get_train_scheduler()
+        scheduler = UniPCMultistepScheduler(**self._wan_generation_scheduler_config)
         pipeline = Wan22Pipeline(
             vae=self.vae,
             transformer=self.model,
