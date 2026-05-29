@@ -17,7 +17,7 @@ from toolkit.config_modules import GenerateImageConfig
 from toolkit.data_loader import get_dataloader_datasets
 from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO, FileItemDTO
 from toolkit.guidance import get_targeted_guidance_loss, get_guidance_loss, GuidanceType
-from toolkit.image_utils import show_tensors, show_latents
+from toolkit.image_utils import show_tensors, bilateral_filter, show_latents
 from toolkit.ip_adapter import IPAdapter
 from toolkit.custom_adapter import CustomAdapter
 from toolkit.print import print_acc
@@ -885,6 +885,24 @@ class SDTrainer(BaseSDTrainProcess):
             pass
         if prior_loss is not None:
             loss = loss + prior_loss
+
+        bilateral_structure_loss_weight = getattr(self.train_config, 'bilateral_structure_loss_weight', 0.0)
+        if bilateral_structure_loss_weight is not None and bilateral_structure_loss_weight != 0.0:
+            diameter = getattr(self.train_config, 'bilateral_structure_loss_diameter', 7)
+            sigma_color = getattr(self.train_config, 'bilateral_structure_loss_sigma_color', 0.1)
+            sigma_space = getattr(self.train_config, 'bilateral_structure_loss_sigma_space', 2.0)
+            filtered_pred = bilateral_filter(pred.float(), diameter, sigma_color, sigma_space)
+            filtered_target = bilateral_filter(target.float(), diameter, sigma_color, sigma_space)
+            bilateral_loss = torch.nn.functional.mse_loss(
+                filtered_pred,
+                filtered_target,
+                reduction='none'
+            )
+            if len(bilateral_loss.shape) == 5:
+                bilateral_loss = bilateral_loss.mean([1, 2, 3, 4])
+            else:
+                bilateral_loss = bilateral_loss.mean([1, 2, 3])
+            loss = loss + bilateral_loss * bilateral_structure_loss_weight
 
         if not self.train_config.train_turbo:
             if self.train_config.learnable_snr_gos:

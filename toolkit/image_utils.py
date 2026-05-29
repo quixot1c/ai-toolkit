@@ -539,6 +539,66 @@ def reduce_contrast(tensor, factor):
     # Clip values to ensure they stay within -1 to 1 range
     return torch.clamp(adjusted_tensor, -1.0, 1.0)
 
+def _gaussian_kernel(diameter: int, sigma: float, device: torch.device, dtype: torch.dtype):
+    radius = diameter // 2
+    coords = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
+    grid_x, grid_y = torch.meshgrid(coords, coords, indexing='xy')
+    kernel = torch.exp(-(grid_x ** 2 + grid_y ** 2) / (2 * sigma * sigma))
+    return kernel.view(-1, 1, 1)
+
+
+def bilateral_filter(image_tensor, diameter, sigma_color, sigma_space):
+    """
+    Apply a differentiable bilateral filter to a tensor.
+
+    Args:
+        image_tensor: torch.Tensor of shape (B, C, H, W) or (B, C, T, H, W)
+        diameter: int, neighborhood diameter
+        sigma_color: float, range sigma
+        sigma_space: float, spatial sigma
+
+    Returns:
+        torch.Tensor with the same shape, device, and dtype as the input.
+    """
+    if diameter <= 0:
+        raise ValueError("diameter must be positive")
+    if sigma_color <= 0 or sigma_space <= 0:
+        raise ValueError("sigma_color and sigma_space must be positive")
+
+    original_device = image_tensor.device
+    original_dtype = image_tensor.dtype
+    x = image_tensor.float()
+    is_video = x.ndim == 5
+
+    if is_video:
+        b, c, t, h, w = x.shape
+        x = x.permute(0, 2, 1, 3, 4).reshape(b * t * c, 1, h, w)
+    elif x.ndim == 4:
+        b, c, h, w = x.shape
+        x = x.reshape(b * c, 1, h, w)
+    else:
+        raise ValueError("bilateral_filter only supports 4D and 5D tensors")
+
+    padding = diameter // 2
+    patches = torch.nn.functional.unfold(x, kernel_size=diameter, padding=padding)
+    center = x.reshape(x.shape[0], 1, -1)
+    spatial_weight = _gaussian_kernel(diameter, sigma_space, device=x.device, dtype=x.dtype)
+
+    diff = patches - center
+    range_weight = torch.exp(-(diff ** 2) / (2 * (sigma_color ** 2)))
+    weights = spatial_weight * range_weight
+    weighted_sum = (weights * patches).sum(dim=1)
+    weight_sum = weights.sum(dim=1).clamp_min(1e-8)
+
+    filtered = (weighted_sum / weight_sum).reshape(x.shape[0], 1, h, w)
+
+    if is_video:
+        filtered = filtered.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
+    else:
+        filtered = filtered.reshape(b, c, h, w)
+
+    return filtered.to(original_device, dtype=original_dtype)
+
 atexit.register(on_exit)
 
 if __name__ == "__main__":
