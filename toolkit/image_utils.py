@@ -544,7 +544,7 @@ def _gaussian_kernel(diameter: int, sigma: float, device: torch.device, dtype: t
     coords = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
     grid_x, grid_y = torch.meshgrid(coords, coords, indexing='xy')
     kernel = torch.exp(-(grid_x ** 2 + grid_y ** 2) / (2 * sigma * sigma))
-    return kernel.view(-1, 1, 1)
+    return kernel.view(1, -1, 1)
 
 
 def bilateral_filter(image_tensor, diameter, sigma_color, sigma_space):
