@@ -777,6 +777,74 @@ class ImageProcessingDTOMixin:
             # Re-raise with more detailed information
             raise Exception(f"Video loading error ({self.path}): {error_msg}") from e
         
+    def _load_raw_image_tensor(
+            self: 'FileItemDTO',
+            transform: Union[None, transforms.Compose],
+    ):
+        try:
+            img = Image.open(self.path)
+            img = exif_transpose(img)
+        except Exception as e:
+            print_acc(f"Error: {e}")
+            print_acc(f"Error loading image: {self.path}")
+            return
+
+        if self.use_alpha_as_mask:
+            np_img = np.array(img)
+            np_img = np_img[:, :, :3]
+            img = Image.fromarray(np_img)
+
+        img = img.convert('RGB')
+
+        if self.flip_x:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        if self.flip_y:
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+
+        if self.dataset_config.buckets:
+            img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+            if img.width < self.crop_x + self.crop_width or img.height < self.crop_y + self.crop_height:
+                print_acc('size mismatch')
+            img = img.crop((
+                self.crop_x,
+                self.crop_y,
+                self.crop_x + self.crop_width,
+                self.crop_y + self.crop_height
+            ))
+        else:
+            img = img.resize(
+                (int(img.size[0] * self.dataset_config.scale), int(img.size[1] * self.dataset_config.scale)),
+                Image.BICUBIC)
+            min_img_size = min(img.size)
+            if self.dataset_config.random_crop:
+                if self.dataset_config.random_scale and min_img_size > self.dataset_config.resolution:
+                    if min_img_size < self.dataset_config.resolution:
+                        print_acc(
+                            f"Unexpected values: min_img_size={min_img_size}, self.resolution={self.dataset_config.resolution}, image file={self.path}")
+                        scale_size = self.dataset_config.resolution
+                    else:
+                        scale_size = random.randint(self.dataset_config.resolution, int(min_img_size))
+                    scaler = scale_size / min_img_size
+                    scale_width = int((img.width + 5) * scaler)
+                    scale_height = int((img.height + 5) * scaler)
+                    img = img.resize((scale_width, scale_height), Image.BICUBIC)
+                img = transforms.RandomCrop(self.dataset_config.resolution)(img)
+            else:
+                img = transforms.CenterCrop(min_img_size)(img)
+                img = img.resize((self.dataset_config.resolution, self.dataset_config.resolution), Image.BICUBIC)
+
+        if self.augments is not None and len(self.augments) > 0:
+            for augment in self.augments:
+                if augment in transforms_dict:
+                    img = transforms_dict[augment](img)
+
+        if self.has_augmentations:
+            img = self.augment_image(img, transform=transform)
+        elif transform:
+            img = transform(img)
+
+        self.tensor = img
+
     def load_and_process_image(
             self: 'FileItemDTO',
             transform: Union[None, transforms.Compose],
@@ -788,6 +856,8 @@ class ImageProcessingDTOMixin:
         # if we are caching latents, just do that
         if self.is_latent_cached:
             self.get_latent()
+            if self.retain_raw_tensor_when_cached and not only_load_latents:
+                self._load_raw_image_tensor(transform)
             if self.has_control_image:
                 self.load_control_image()
             if self.has_inpaint_image:

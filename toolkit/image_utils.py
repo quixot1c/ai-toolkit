@@ -547,9 +547,24 @@ def _gaussian_kernel(diameter: int, sigma: float, device: torch.device, dtype: t
     return kernel.view(1, -1, 1)
 
 
-def bilateral_filter(image_tensor, diameter, sigma_color, sigma_space):
+def bilateral_filter(image_tensor, diameter: int, sigma_color: float, sigma_space: float, method: str = 'exact'):
     """
     Apply a differentiable bilateral filter to a tensor.
+
+    diameter:
+    Controls the size of the local neighborhood used for filtering.
+    Larger diameter means each output pixel is influenced by a bigger patch, giving stronger, more global smoothing.
+    Smaller diameter keeps the filter more local and preserves finer detail.
+    
+    sigma_space:
+    Controls how quickly the spatial weight falls off with distance.
+    A small sigma_space makes the filter focus on very nearby pixels only, reducing blur radius even if diameter is large.
+    A larger sigma_space makes the spatial kernel broader, allowing more distant neighbors to contribute.
+    
+    sigma_color:
+    Controls how much intensity/color differences affect the weight.
+    A small sigma_color makes the filter preserve edges more strongly: pixels with different values contribute much less.
+    A larger sigma_color makes the filter more like a normal Gaussian blur, allowing more smoothing across intensity boundaries.
 
     Args:
         image_tensor: torch.Tensor of shape (B, C, H, W) or (B, C, T, H, W)
@@ -570,32 +585,82 @@ def bilateral_filter(image_tensor, diameter, sigma_color, sigma_space):
     x = image_tensor.float()
     is_video = x.ndim == 5
 
+    def _box_filter(inp, r: int):
+        # fast box filter using avg_pool2d
+        ks = 2 * r + 1
+        return torch.nn.functional.avg_pool2d(inp, kernel_size=ks, stride=1, padding=r)
+
+    def _guided_filter(inp, diameter, eps):
+        # fast approximate edge-preserving filter (He et al., Guided Filter)
+        # inp: (N, C, H, W)
+        r = diameter // 2
+        # use mean of channels as guidance
+        I = inp.mean(dim=1, keepdim=True)
+
+        # prepare shapes
+        N, C, H, W = inp.shape
+        q = torch.empty_like(inp)
+
+        for ch in range(C):
+            p = inp[:, ch:ch+1, :, :]
+
+            mean_I = _box_filter(I, r)
+            mean_p = _box_filter(p, r)
+            corr_I = _box_filter(I * I, r)
+            corr_Ip = _box_filter(I * p, r)
+
+            var_I = corr_I - mean_I * mean_I
+            cov_Ip = corr_Ip - mean_I * mean_p
+
+            a = cov_Ip / (var_I + eps)
+            b = mean_p - a * mean_I
+
+            mean_a = _box_filter(a, r)
+            mean_b = _box_filter(b, r)
+
+            q[:, ch:ch+1, :, :] = mean_a * I + mean_b
+
+        return q
+
     if is_video:
         b, c, t, h, w = x.shape
-        x = x.permute(0, 2, 1, 3, 4).reshape(b * t * c, 1, h, w)
-    elif x.ndim == 4:
-        b, c, h, w = x.shape
-        x = x.reshape(b * c, 1, h, w)
+        x_proc = x.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
     else:
-        raise ValueError("bilateral_filter only supports 4D and 5D tensors")
+        if x.ndim == 4:
+            b, c, h, w = x.shape
+            x_proc = x.reshape(b, c, h, w)
+        else:
+            raise ValueError("bilateral_filter only supports 4D and 5D tensors")
 
-    padding = diameter // 2
-    patches = torch.nn.functional.unfold(x, kernel_size=diameter, padding=padding)
-    center = x.reshape(x.shape[0], 1, -1)
-    spatial_weight = _gaussian_kernel(diameter, sigma_space, device=x.device, dtype=x.dtype)
+    # choose method
+    method = method.lower() if method is not None else 'exact'
+    if method in ('guided', 'approx', 'fast'):
+        # guided filter is O(N) and much faster than the unfolding approach
+        # eps controls edge preservation; map sigma_color to eps
+        eps = (sigma_color ** 2) if sigma_color is not None else 1e-4
+        filtered_proc = _guided_filter(x_proc, diameter, eps)
+    else:
+        # exact bilateral via unfold (original implementation)
+        padding = diameter // 2
+        # unfold across channels: process each channel separately by treating C as batch
+        x_unfold = x_proc.reshape(-1, 1, h, w)
+        patches = torch.nn.functional.unfold(x_unfold, kernel_size=diameter, padding=padding)
+        center = x_unfold.reshape(x_unfold.shape[0], 1, -1)
+        spatial_weight = _gaussian_kernel(diameter, sigma_space, device=x_unfold.device, dtype=x_unfold.dtype)
 
-    diff = patches - center
-    range_weight = torch.exp(-(diff ** 2) / (2 * (sigma_color ** 2)))
-    weights = spatial_weight * range_weight
-    weighted_sum = (weights * patches).sum(dim=1)
-    weight_sum = weights.sum(dim=1).clamp_min(1e-8)
+        diff = patches - center
+        range_weight = torch.exp(-(diff ** 2) / (2 * (sigma_color ** 2)))
+        weights = spatial_weight * range_weight
+        weighted_sum = (weights * patches).sum(dim=1)
+        weight_sum = weights.sum(dim=1).clamp_min(1e-8)
 
-    filtered = (weighted_sum / weight_sum).reshape(x.shape[0], 1, h, w)
+        filtered = (weighted_sum / weight_sum).reshape(x_unfold.shape[0], 1, h, w)
+        filtered_proc = filtered.reshape(x_proc.shape[0], x_proc.shape[1], h, w)
 
     if is_video:
-        filtered = filtered.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
+        filtered = filtered_proc.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
     else:
-        filtered = filtered.reshape(b, c, h, w)
+        filtered = filtered_proc.reshape(b, c, h, w)
 
     return filtered.to(original_device, dtype=original_dtype)
 

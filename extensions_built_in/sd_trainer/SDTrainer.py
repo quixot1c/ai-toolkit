@@ -265,12 +265,20 @@ class SDTrainer(BaseSDTrainProcess):
         
         if self.train_config.do_prior_divergence:
             self.do_prior_prediction = True
-        # move vae to device if we did not cache latents
-        if not self.is_latents_cached:
+
+        # Keep VAE on GPU if needed for:
+        # 1. Training (need to encode images when latents are not cached)
+        # 2. Bilateral loss (need to decode predictions and target images/latents)
+        bilateral_structure_loss_weight = getattr(self.train_config, 'bilateral_structure_loss_weight', 0.0)
+        needs_vae_on_gpu = (
+            not self.is_latents_cached or
+            (bilateral_structure_loss_weight is not None and bilateral_structure_loss_weight != 0.0)
+        )
+        if needs_vae_on_gpu:
             self.sd.vae.eval()
             self.sd.vae.to(self.device_torch)
         else:
-            # offload it. Already cached
+            # offload it. No need for VAE if latents are cached and no bilateral loss
             self.sd.vae.to('cpu')
             flush()
         add_all_snr_to_noise_scheduler(self.sd.noise_scheduler, self.device_torch)
@@ -480,6 +488,55 @@ class SDTrainer(BaseSDTrainProcess):
 
         return output, batch.tensor.to(self.device_torch, dtype=get_torch_dtype(self.train_config.dtype))
 
+    def _decode_latents_to_image(self, latents: torch.Tensor):
+        if self.sd.vae is None:
+            raise ValueError("Image-space bilateral loss requires a VAE")
+
+        if getattr(self.sd.vae, 'device', None) != self.device_torch:
+            self.sd.vae.to(self.device_torch)
+
+        scale = getattr(self.sd.vae.config, 'scaling_factor', 1.0)
+        vae_dtype = getattr(self.sd.vae, 'dtype', latents.dtype)
+
+        if latents.ndim == 5:
+            b, c, t, h, w = latents.shape
+            latents_flat = latents.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
+            decoded = self.sd.vae.decode((latents_flat / scale).to(self.device_torch, dtype=vae_dtype)).sample
+            decoded = decoded.reshape(b, t, decoded.shape[1], decoded.shape[2], decoded.shape[3]).permute(0, 2, 1, 3, 4)
+        else:
+            decoded = self.sd.vae.decode((latents / scale).to(self.device_torch, dtype=vae_dtype)).sample
+
+        return decoded
+
+    def _image_space_bilateral_loss(
+            self,
+            pred: torch.Tensor,
+            noisy_latents: torch.Tensor,
+            timesteps: torch.Tensor,
+            target_images: torch.Tensor,
+            diameter: int,
+            sigma_color: float,
+            sigma_space: float,
+    ):
+        if self.train_config.t0_loss_target:
+            pred_latents = pred
+        else:
+            pred_latents = self.sd.step_scheduler(pred, noisy_latents, timesteps)
+
+        decoded_pred = self._decode_latents_to_image(pred_latents)
+        target_images = target_images.to(decoded_pred.device, dtype=decoded_pred.dtype)
+
+        filtered_pred = bilateral_filter(decoded_pred.float(), diameter, sigma_color, sigma_space)
+        filtered_target = bilateral_filter(target_images.float(), diameter, sigma_color, sigma_space)
+
+        bilateral_loss = torch.nn.functional.mse_loss(filtered_pred, filtered_target, reduction='none')
+        if len(bilateral_loss.shape) == 5:
+            bilateral_loss = bilateral_loss.mean([1, 2, 3, 4])
+        else:
+            bilateral_loss = bilateral_loss.mean([1, 2, 3])
+
+        return bilateral_loss
+
     # you can expand these in a child class to make customization easier
     def calculate_loss(
             self,
@@ -492,6 +549,7 @@ class SDTrainer(BaseSDTrainProcess):
             prior_pred: Union[torch.Tensor, None] = None,
             **kwargs
     ):
+        print_acc("inside calculate_loss")
         loss_target = self.train_config.loss_target
         is_reg = any(batch.get_is_reg_list())
         additional_loss = 0.0
@@ -889,19 +947,23 @@ class SDTrainer(BaseSDTrainProcess):
         bilateral_structure_loss_weight = getattr(self.train_config, 'bilateral_structure_loss_weight', 0.0)
         if bilateral_structure_loss_weight is not None and bilateral_structure_loss_weight != 0.0:
             diameter = getattr(self.train_config, 'bilateral_structure_loss_diameter', 7)
-            sigma_color = getattr(self.train_config, 'bilateral_structure_loss_sigma_color', 0.1)
-            sigma_space = getattr(self.train_config, 'bilateral_structure_loss_sigma_space', 2.0)
-            filtered_pred = bilateral_filter(pred.float(), diameter, sigma_color, sigma_space)
-            filtered_target = bilateral_filter(target.float(), diameter, sigma_color, sigma_space)
-            bilateral_loss = torch.nn.functional.mse_loss(
-                filtered_pred,
-                filtered_target,
-                reduction='none'
-            )
-            if len(bilateral_loss.shape) == 5:
-                bilateral_loss = bilateral_loss.mean([1, 2, 3, 4])
+            sigma_color = getattr(self.train_config, 'bilateral_structure_loss_sigma_color', 0.05)
+            sigma_space = getattr(self.train_config, 'bilateral_structure_loss_sigma_space', 7.0)
+
+            if batch.tensor is not None:
+                target_images = batch.tensor.detach()
             else:
-                bilateral_loss = bilateral_loss.mean([1, 2, 3])
+                raise ValueError("Image-space bilateral loss requires batch.tensor")
+            bilateral_loss = self._image_space_bilateral_loss(
+                pred=pred,
+                noisy_latents=noisy_latents,
+                timesteps=timesteps,
+                target_images=target_images,
+                diameter=diameter,
+                sigma_color=sigma_color,
+                sigma_space=sigma_space,
+            )
+
             loss = loss + bilateral_loss * bilateral_structure_loss_weight
 
         if not self.train_config.train_turbo:

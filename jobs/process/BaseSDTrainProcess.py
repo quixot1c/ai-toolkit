@@ -1079,6 +1079,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 if batch.latents is not None:
                     latents = batch.latents.to(self.device_torch, dtype=dtype)
                     batch.latents = latents
+                    # if imgs is not None:
+                    #     del imgs
                 else:
                     # normalize to
                     if self.train_config.standardize_images:
@@ -1100,12 +1102,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         target_std = target_std.unsqueeze(0).unsqueeze(2).unsqueeze(3)
 
                         imgs = imgs * target_std + target_mean
-                        batch.tensor = imgs
+                        batch.tensor = imgs.detach().cpu()
 
                         # show_tensors(imgs, 'imgs')
 
                     latents = self.sd.encode_images(imgs)
                     batch.latents = latents
+                    imgs = batch.tensor.detach().cpu() if batch.tensor is not None else None
 
                 if self.train_config.standardize_latents:
                     if self.sd.is_xl or self.sd.is_vega or self.sd.is_ssd:
@@ -2042,11 +2045,21 @@ class BaseSDTrainProcess(BaseTrainProcess):
         ### HOOk ###
         self.before_dataset_load()
         # load datasets if passed in the root process
+        retain_raw_images = getattr(self.train_config, 'bilateral_structure_loss_weight', 0.0) is not None and getattr(self.train_config, 'bilateral_structure_loss_weight', 0.0) != 0.0
         if self.datasets is not None:
-            self.data_loader = get_dataloader_from_datasets(self.datasets, self.train_config.batch_size, self.sd)
+            self.data_loader = get_dataloader_from_datasets(
+                self.datasets,
+                self.train_config.batch_size,
+                self.sd,
+                retain_raw_images=retain_raw_images,
+            )
         if self.datasets_reg is not None:
-            self.data_loader_reg = get_dataloader_from_datasets(self.datasets_reg, self.train_config.batch_size,
-                                                                self.sd)
+            self.data_loader_reg = get_dataloader_from_datasets(
+                self.datasets_reg,
+                self.train_config.batch_size,
+                self.sd,
+                retain_raw_images=retain_raw_images,
+            )
 
         flush()
         self.last_save_step = self.step_num

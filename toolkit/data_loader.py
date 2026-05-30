@@ -389,6 +389,7 @@ class AiToolkitDataset(LatentCachingMixin, ControlCachingMixin, CLIPCachingMixin
             dataset_config: 'DatasetConfig',
             batch_size=1,
             sd: 'StableDiffusion' = None,
+            retain_raw_images: bool = False,
     ):
         self.dataset_config = dataset_config
         # update bucket divisibility
@@ -407,6 +408,7 @@ class AiToolkitDataset(LatentCachingMixin, ControlCachingMixin, CLIPCachingMixin
         self.is_caching_clip_vision_to_disk = dataset_config.cache_clip_vision_to_disk
         self.is_generating_controls = len(dataset_config.controls) > 0
         self.epoch_num = 0
+        self.retain_raw_images = retain_raw_images
 
         self.sd = sd
 
@@ -538,6 +540,7 @@ class AiToolkitDataset(LatentCachingMixin, ControlCachingMixin, CLIPCachingMixin
                     latent_space_version=latent_space_version,
                     temporal_compression=temporal_compression,
                     sample_rate=self.sd.sample_rate if self.is_audio_model and self.sd is not None else 48000,
+                    retain_raw_tensor_when_cached=self.retain_raw_images,
                 )
                 self.file_list.append(file_item)
             except Exception as e:
@@ -641,6 +644,7 @@ def get_dataloader_from_datasets(
         dataset_options,
         batch_size=1,
         sd: 'StableDiffusion' = None,
+        retain_raw_images: bool = False,
 ) -> DataLoader:
     if dataset_options is None or len(dataset_options) == 0:
         return None
@@ -663,7 +667,7 @@ def get_dataloader_from_datasets(
     for config in dataset_config_list:
 
         if config.type == 'image':
-            dataset = AiToolkitDataset(config, batch_size=batch_size, sd=sd)
+            dataset = AiToolkitDataset(config, batch_size=batch_size, sd=sd, retain_raw_images=retain_raw_images)
             datasets.append(dataset)
             if config.buckets:
                 has_buckets = True

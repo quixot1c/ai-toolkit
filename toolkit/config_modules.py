@@ -583,6 +583,11 @@ class TrainConfig:
         # will clip the loss to this amount to prevent wild outliers
         self.max_loss: Optional[float] = kwargs.get("max_loss", None)
 
+        self.bilateral_structure_loss_weight = kwargs.get("bilateral_structure_loss_weight", None)
+        self.bilateral_structure_loss_diameter = kwargs.get("bilateral_structure_loss_diameter", 7.0)
+        self.bilateral_structure_loss_sigma_color = kwargs.get("bilateral_structure_loss_sigma_color", 0.05)
+        self.bilateral_structure_loss_sigma_space = kwargs.get("bilateral_structure_loss_sigma_space", 7.0)
+
 
 ModelArch = Literal['sd1', 'sd2', 'sd3', 'sdxl', 'pixart', 'pixart_sigma', 'auraflow', 'flux', 'flex1', 'flex2', 'lumina2', 'vega', 'ssd', 'wan21']
 

@@ -61,6 +61,7 @@ class FileItemDTO(
         self.is_audio_model = kwargs.get("is_audio_model", False)
         self.sample_rate = kwargs.get("sample_rate", 48000)
         self.num_frames = self.dataset_config.num_frames
+        self.retain_raw_tensor_when_cached: bool = kwargs.get("retain_raw_tensor_when_cached", False)
         self.temporal_compression = kwargs.get("temporal_compression", 8)
         size_database = kwargs.get("size_database", {})
         dataset_root = kwargs.get("dataset_root", None)
@@ -215,15 +216,17 @@ class DataLoaderBatchDTO:
             
             self.num_frames: int = self.file_items[0].num_frames
 
-            if not is_latents_cached:
-                # only return a tensor if latents are not cached
-                self.tensor: torch.Tensor = torch.cat(
+            # only return raw image tensors when latents are not cached
+            self.tensor: Union[torch.Tensor, None] = None
+            if all([x.tensor is not None for x in self.file_items]):
+                self.tensor = torch.cat(
                     [x.tensor.unsqueeze(0) for x in self.file_items]
                 )
+
             # if we have encoded latents, we concatenate them
             self.latents: Union[torch.Tensor, None] = None
             if is_latents_cached:
-                # this get_latent call with trigger loading all cached items from the disk
+                # this get_latent call will load cached latents from disk
                 self.latents = torch.cat(
                     [x.get_latent().unsqueeze(0) for x in self.file_items]
                 )
